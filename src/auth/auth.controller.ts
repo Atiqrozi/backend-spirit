@@ -1,0 +1,4 @@
+import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common'; import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'; import { IsEmail, IsString, MinLength } from 'class-validator'; import { AuthService } from './auth.service'; import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+class LoginDto { @IsEmail() email: string; @IsString() @MinLength(8) password: string; }
+class RefreshDto { @IsString() refreshToken: string; }
+@ApiTags('Auth') @Controller('auth') export class AuthController { constructor(private auth: AuthService) {} @Post('login') login(@Body() dto: LoginDto) { return this.auth.login(dto.email, dto.password); } @Post('refresh') refresh(@Body() dto: RefreshDto) { return this.auth.refresh(dto.refreshToken); } @Post('logout') @UseGuards(JwtAuthGuard) @ApiBearerAuth() logout(@Req() req) { return this.auth.logout(req.user.sub); } }

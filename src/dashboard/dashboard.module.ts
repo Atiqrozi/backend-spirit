@@ -1,0 +1,2 @@
+import { Module } from '@nestjs/common'; import { MongooseModule } from '@nestjs/mongoose'; import { DomainSchema } from '../common/domain.schema'; import { DashboardController } from './dashboard.controller';
+@Module({imports:[MongooseModule.forFeature([{name:'Report',schema:DomainSchema,collection:'reports'},{name:'Task',schema:DomainSchema,collection:'tasks'},{name:'Document',schema:DomainSchema,collection:'reference_documents'}])],controllers:[DashboardController]}) export class DashboardModule {}

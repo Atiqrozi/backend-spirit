@@ -1,0 +1,13 @@
+{
+  "fields": [
+    {
+      "type": "vector",
+      "path": "embedding",
+      "numDimensions": 2048,
+      "similarity": "cosine"
+    },
+    { "type": "filter", "path": "status" },
+    { "type": "filter", "path": "documentId" },
+    { "type": "filter", "path": "documentVersionId" }
+  ]
+}

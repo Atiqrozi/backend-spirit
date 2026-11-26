@@ -1,0 +1,2 @@
+import { Module } from '@nestjs/common'; import { MongooseModule } from '@nestjs/mongoose'; import { DomainSchema } from '../common/domain.schema'; import { NotificationsController } from './notifications.controller';
+@Module({imports:[MongooseModule.forFeature([{name:'Notification',schema:DomainSchema,collection:'notification_logs'}])],controllers:[NotificationsController]}) export class NotificationsModule {}

@@ -1,0 +1,2 @@
+import { Module } from '@nestjs/common'; import { MongooseModule } from '@nestjs/mongoose'; import { DomainSchema } from '../common/domain.schema'; import { TemplatesController } from './templates.controller';
+@Module({imports:[MongooseModule.forFeature([{name:'Template',schema:DomainSchema,collection:'report_templates'},{name:'TemplateVersion',schema:DomainSchema,collection:'report_template_versions'}])],controllers:[TemplatesController]}) export class TemplatesModule {}

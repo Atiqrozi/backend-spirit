@@ -1,0 +1,2 @@
+import { Module } from '@nestjs/common'; import { MongooseModule } from '@nestjs/mongoose'; import { DomainSchema } from '../common/domain.schema'; import { TasksController } from './tasks.controller';
+@Module({imports:[MongooseModule.forFeature([{name:'Task',schema:DomainSchema,collection:'tasks'},{name:'Occurrence',schema:DomainSchema,collection:'task_occurrences'},{name:'Recurrence',schema:DomainSchema,collection:'task_recurrences'}])],controllers:[TasksController]}) export class TasksModule {}
