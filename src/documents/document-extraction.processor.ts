@@ -11,6 +11,10 @@ import { TextChunkerService, ExtractedPage } from './text-chunker.service';
 
 interface OcrResponse { data?: Array<{ index: number; text_detections?: Array<{ text_prediction?: { text?: string; confidence?: number } }> }>; }
 
+// Keep native import out of the deployment bundler's static analysis: pdf-raster is ESM-only,
+// while the Vercel NestJS function is emitted as CommonJS.
+const importEsmAtRuntime = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<any>;
+
 @Injectable()
 @Processor('document-extraction', { concurrency: 2 })
 export class DocumentExtractionProcessor extends WorkerHost {
@@ -116,7 +120,7 @@ export class DocumentExtractionProcessor extends WorkerHost {
     if (!pageCount || pageCount > maxPages) throw new Error(`Jumlah halaman PDF tidak valid atau melebihi batas ${maxPages}`);
     const pages: ExtractedPage[] = Array.from({ length: pageCount }, (_, index) => ({ pageNumber: index + 1, text: nativeText[index] || '', status: (nativeText[index] || '').length >= 20 ? 'NATIVE_TEXT_EXTRACTED' : 'PENDING_OCR' }));
     const scanIndices = pages.filter((page) => page.status === 'PENDING_OCR').map((page) => page.pageNumber - 1);
-    const { convert } = scanIndices.length ? await import('pdf-raster') : { convert: null };
+    const { convert } = scanIndices.length ? await importEsmAtRuntime('pdf-raster') : { convert: null };
     for (const pageIndex of scanIndices) {
       const page = pages[pageIndex];
       let completed = false;
