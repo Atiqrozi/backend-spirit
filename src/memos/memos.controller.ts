@@ -6,7 +6,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { InjectModel } from '@nestjs/mongoose';
 import { InjectQueue } from '@nestjs/bullmq';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
-import { IsDateString, IsIn, IsMongoId, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsDateString, IsIn, IsMongoId, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { Model, Types } from 'mongoose';
 import { Queue } from 'bullmq';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -26,6 +26,7 @@ class CreateMemoDto {
   @IsMongoId() reportReviewId: string;
 }
 class MemoStatusDto { @IsIn(['SENT_TO_SHEYLA', 'SENT_TO_DIRECTOR']) status: string; }
+class DispositionTextDto { @IsString() @MinLength(5) @MaxLength(10000) text: string; }
 class ManualFollowUpDto {
   @IsString() @MaxLength(500) title: string;
   @IsString() @MaxLength(8000) description: string;
@@ -44,6 +45,7 @@ export class MemosController {
     @InjectModel('Memo') private readonly memos: Model<any>,
     @InjectModel('Report') private readonly reports: Model<any>,
     @InjectModel('ReportVersion') private readonly versions: Model<any>,
+    @InjectModel('DocumentPage') private readonly pages: Model<any>,
     @InjectModel('Review') private readonly reviews: Model<any>,
     @InjectModel('Recommendation') private readonly recommendations: Model<any>,
     @InjectModel('FollowUp') private readonly followUps: Model<any>,
@@ -142,6 +144,54 @@ export class MemosController {
     }
   }
 
+  @Post(':id/disposition-text')
+  @Roles(Role.ADMIN_SPI, Role.PIMPINAN_SPI)
+  async submitDispositionText(@Param('id') id: string, @Body() dto: DispositionTextDto, @Req() req: any) {
+    const text = dto.text.trim();
+    if (text.length < 5) throw new BadRequestException('Isi arahan disposisi minimal 5 karakter');
+    const memo: any = await this.memos.findById(id);
+    if (!memo) throw new NotFoundException('Memo tidak ditemukan');
+    if (memo.status !== 'SENT_TO_DIRECTOR') throw new ConflictException('Memo harus berstatus dikirim ke Direktur sebelum isi disposisi dicatat');
+    const report: any = await this.reports.findById(memo.reportId);
+    if (!report) throw new NotFoundException('Laporan terkait tidak ditemukan');
+    const baseReview: any = await this.reviews.findOne({ _id: memo.reportReviewId, reportId: memo.reportId, status: 'COMPLETED' }).lean();
+    if (!baseReview) throw new ConflictException('Hasil review laporan yang dikirim ke Direktur tidak tersedia');
+
+    const versionNumber = Number(report.version || 0) + 1;
+    const versionId = new Types.ObjectId();
+    await this.versions.create({
+      _id: versionId,
+      reportId: String(memo.reportId),
+      version: versionNumber,
+      createdBy: req.user.sub,
+      status: 'EXTRACTED',
+      data: {
+        documentRole: 'DIRECTOR_DISPOSITION',
+        reviewPurpose: 'DIRECTOR_DISPOSITION',
+        memoId: String(memo._id),
+        baseReviewId: String(baseReview._id),
+        extractedText: text,
+        disposition: { inputMethod: 'MANUAL_TEXT', text, enteredBy: req.user.sub, enteredAt: new Date() },
+        processing: { status: 'EXTRACTED', source: 'MANUAL_TRANSCRIPTION', pageCount: 1, processedAt: new Date() },
+      },
+    });
+    await this.pages.updateOne(
+      { documentVersionId: String(versionId), pageNumber: 1 },
+      { $set: { documentVersionId: String(versionId), pageNumber: 1, text, status: 'MANUAL_TRANSCRIPTION', extractedAt: new Date() } },
+      { upsert: true },
+    );
+    report.version = versionNumber;
+    report.status = 'UNDER_REVIEW';
+    await report.save();
+
+    memo.dispositionVersionId = versionId;
+    memo.dispositionReviewId = null;
+    memo.status = 'DISPOSITION_RECEIVED';
+    memo.statusHistory.push({ status: 'DISPOSITION_RECEIVED', changedBy: req.user.sub, changedAt: new Date(), inputMethod: 'MANUAL_TEXT' });
+    await memo.save();
+    return { memo: memo.toObject(), reportVersionId: String(versionId), extractionStatus: 'EXTRACTED', inputMethod: 'MANUAL_TEXT' };
+  }
+
   @Post(':id/disposition-review')
   @Roles(Role.ADMIN_SPI, Role.PIMPINAN_SPI)
   async startDispositionReview(@Param('id') id: string, @Req() req: any) {
@@ -149,7 +199,7 @@ export class MemosController {
     if (!memo) throw new NotFoundException('Memo tidak ditemukan');
     if (memo.status !== 'DISPOSITION_RECEIVED' || !memo.dispositionVersionId) throw new ConflictException('Unggah disposisi direktur terlebih dahulu');
     const version: any = await this.versions.findById(memo.dispositionVersionId).lean();
-    if (!version || version.status !== 'EXTRACTED') throw new ConflictException('Ekstraksi PDF disposisi harus selesai terlebih dahulu');
+    if (!version || version.status !== 'EXTRACTED') throw new ConflictException('Teks disposisi harus tersedia dan siap ditinjau terlebih dahulu');
     const prior: any = await this.reviews.findOne({ reportId: memo.reportId, reportVersionId: version._id, 'data.memoId': String(memo._id) }).sort({ createdAt: -1 }).lean();
     if (prior?.status === 'PROCESSING') {
       const ageMs = Date.now() - new Date(prior.createdAt || Date.now()).getTime();

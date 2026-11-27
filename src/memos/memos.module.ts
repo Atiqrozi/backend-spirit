@@ -14,6 +14,7 @@ import { MemosController } from './memos.controller';
       { name: 'Memo', schema: MemoSchema },
       { name: 'Report', schema: DomainSchema, collection: 'reports' },
       { name: 'ReportVersion', schema: DomainSchema, collection: 'report_versions' },
+      { name: 'DocumentPage', schema: DomainSchema, collection: 'document_pages' },
       { name: 'Review', schema: ReportReviewSchema, collection: 'report_reviews' },
       { name: 'Recommendation', schema: RecommendationSchema, collection: 'ai_recommendations' },
       { name: 'FollowUp', schema: FollowUpSchema, collection: 'follow_up_actions' },

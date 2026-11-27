@@ -77,7 +77,7 @@ export class ReportsController {
   }
 
   @Post()
-  @Roles(Role.ADMIN_SPI, Role.ANGGOTA_SPI)
+  @Roles(Role.ADMIN_SPI, Role.PIMPINAN_SPI, Role.ANGGOTA_SPI)
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: Number(process.env.MAX_UPLOAD_BYTES || 20971520) }, fileFilter: (_req, file, cb) => cb(null, file.mimetype === 'application/pdf') }))
   @ApiConsumes('multipart/form-data')
   async create(@Body() dto: ReportDto, @UploadedFile() file: Express.Multer.File, @Req() req: any) {

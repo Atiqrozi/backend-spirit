@@ -1,11 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Notification } from './notification.schema';
 
 @Injectable()
-export class TaskReminderService {
+export class TaskReminderService implements OnModuleInit {
   private readonly logger = new Logger(TaskReminderService.name);
   private readonly timezone = 'Asia/Jakarta';
 
@@ -14,24 +14,30 @@ export class TaskReminderService {
     @InjectModel(Notification.name) private readonly notifications: Model<Notification>,
   ) {}
 
-  // Jadwal pukul 08.15 WIB. H-2 yang jatuh pada akhir pekan dimajukan ke Jumat.
-  @Cron('15 8 * * *', { timeZone: 'Asia/Jakarta' })
+  async onModuleInit() {
+    // Jalankan catch-up saat backend menyala supaya reminder yang terlewat segera dibuat.
+    try {
+      await this.remindAssignedUsers();
+    } catch (error) {
+      this.logger.error(`Pemeriksaan awal pengingat tenggat gagal: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // Periksa berkala pada jam kerja agar tugas yang dibuat setelah pukul 08.15 tidak terlewat.
+  // H-2 yang jatuh pada akhir pekan dimajukan ke Jumat.
+  @Cron('*/15 8-9 * * 1-5', { timeZone: 'Asia/Jakarta' })
   async remindAssignedUsers() {
     const now = new Date();
     const today = this.localDateParts(now);
     const todayKey = this.dateKey(today.year, today.month, today.day);
-    const todayWeekday = new Date(Date.UTC(today.year, today.month - 1, today.day)).getUTCDay();
-
-    // Setiap hari cek H-2. Pada Jumat, cek juga tenggat Senin dan Selasa karena H-2-nya akhir pekan.
-    const offsets = todayWeekday === 5 ? [2, 3, 4] : [2];
-    const dueDateRanges = offsets.map((offset) => {
-      const start = new Date(Date.UTC(today.year, today.month - 1, today.day + offset) - 7 * 60 * 60 * 1000);
-      return { 'data.dueDate': { $gte: start, $lt: new Date(start.getTime() + 24 * 60 * 60 * 1000) } };
-    });
+    // Ambil jendela tenggat yang cukup lebar untuk catch-up setelah service sempat mati.
+    // H-2 weekend dimajukan ke Jumat; tenggat lampau hanya diproses sekali berkat dedupeKey.
+    const rangeStart = new Date(Date.UTC(today.year, today.month - 1, today.day - 7) - 7 * 60 * 60 * 1000);
+    const rangeEnd = new Date(Date.UTC(today.year, today.month - 1, today.day + 5) - 7 * 60 * 60 * 1000);
 
     const tasks = await this.tasks.find({
       'data.assigneeId': { $exists: true, $ne: '' },
-      $or: dueDateRanges,
+      'data.dueDate': { $gte: rangeStart, $lt: rangeEnd },
       status: { $nin: ['COMPLETED', 'CANCELLED'] },
       'data.status': { $nin: ['COMPLETED', 'CANCELLED'] },
     }).select('_id data').lean();
@@ -49,12 +55,16 @@ export class TaskReminderService {
       if (reminderWeekday === 6) reminderDate.setUTCDate(reminderDate.getUTCDate() - 1);
       if (reminderWeekday === 0) reminderDate.setUTCDate(reminderDate.getUTCDate() - 2);
       const reminderKey = this.dateKey(reminderDate.getUTCFullYear(), reminderDate.getUTCMonth() + 1, reminderDate.getUTCDate());
-      if (reminderKey !== todayKey) continue;
+      // Catch up jika service baru aktif setelah jadwal reminder hari itu.
+      if (reminderKey > todayKey) continue;
 
       const title = String(task.data?.title || 'Penugasan SPI');
       const formattedDate = new Intl.DateTimeFormat('id-ID', {
         timeZone: this.timezone, day: '2-digit', month: 'long', year: 'numeric',
       }).format(dueDate);
+      const deadlineMessage = dueKey < todayKey
+        ? `Tenggat penugasan “${title}” telah lewat (${formattedDate}). Mohon periksa status tugas.`
+        : `Penugasan “${title}” akan jatuh tempo pada ${formattedDate}. Mohon periksa dan selesaikan tugas sebelum tenggat.`;
       const dedupeKey = `task-deadline:${task._id}:${dueKey}`;
       const result = await this.notifications.updateOne(
         { dedupeKey },
@@ -63,7 +73,7 @@ export class TaskReminderService {
           category: 'TASK_DEADLINE',
           priority: 'IMPORTANT',
           title: 'Pengingat tenggat penugasan',
-          message: `Penugasan “${title}” akan jatuh tempo pada ${formattedDate}. Mohon periksa dan selesaikan tugas sebelum tenggat.`,
+          message: deadlineMessage,
           resource: { type: 'TASK', id: String(task._id), route: '/app/tasks' },
           readAt: null,
           dedupeKey,

@@ -42,7 +42,8 @@ export class UsersController {
   async assignees(@Query('page') page = '1', @Query('limit') limit = '100') {
     const p = Math.max(1, Number(page) || 1);
     const size = Math.min(Math.max(1, Number(limit) || 100), 100);
-    const filter = { active: true, role: Role.ANGGOTA_SPI };
+    // All active SPI roles may own a task, including Admin and Pimpinan.
+    const filter = { active: true, role: { $in: Object.values(Role) } };
     const [items, total] = await Promise.all([
       this.users.find(filter).select('_id name email role unit').sort({ name: 1 }).skip((p - 1) * size).limit(size).lean(),
       this.users.countDocuments(filter),

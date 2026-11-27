@@ -43,13 +43,17 @@ export class ReportReviewProcessor extends WorkerHost {
       const reviewPurpose = version?.data?.reviewPurpose || job.data.reviewPurpose || 'REPORT_REVIEW';
       const isDispositionReview = reviewPurpose === 'DIRECTOR_DISPOSITION';
       const dispositionText = await this.getReportText(report, version);
-      const originalVersion: any = isDispositionReview
-        ? await this.reportVersions.findOne({ reportId: { $in: reportIdValues }, _id: { $ne: version._id }, 'data.documentRole': { $ne: 'DIRECTOR_DISPOSITION' } }).sort({ version: -1, createdAt: -1 }).lean()
-        : null;
-      const originalReportText = originalVersion ? await this.getReportText(report, originalVersion) : '';
       const priorReview: any = isDispositionReview && version.data?.baseReviewId
         ? await this.reviews.findOne({ _id: version.data.baseReviewId, reportId }).lean()
         : null;
+      // A memo is linked to the exact report review sent to the director. Use that
+      // snapshot's report version so later uploads cannot silently replace its source.
+      const originalVersion: any = isDispositionReview
+        ? (priorReview?.reportVersionId
+          ? await this.reportVersions.findOne({ _id: priorReview.reportVersionId, reportId: { $in: reportIdValues }, 'data.documentRole': { $ne: 'DIRECTOR_DISPOSITION' } }).lean()
+          : await this.reportVersions.findOne({ reportId: { $in: reportIdValues }, _id: { $ne: version._id }, 'data.documentRole': { $ne: 'DIRECTOR_DISPOSITION' } }).sort({ version: -1, createdAt: -1 }).lean())
+        : null;
+      const originalReportText = originalVersion ? await this.getReportText(report, originalVersion) : '';
       const previousReviewContext = priorReview ? {
         summary: String(priorReview.data?.summary || '').slice(0, isDispositionReview ? 2500 : 8000),
         findings: (await this.findings.find({ reviewId: priorReview._id }).select('title description complianceStatus suggestion priority').limit(isDispositionReview ? 5 : 50).lean()).map((item: any) => ({ ...item, description: String(item.description || '').slice(0, isDispositionReview ? 350 : 700), suggestion: String(item.suggestion || '').slice(0, isDispositionReview ? 250 : 500) })),
@@ -90,7 +94,8 @@ export class ReportReviewProcessor extends WorkerHost {
         })
         : JSON.stringify({ text: reportText.slice(0, maxReviewText), pages: boundedPages, previousAiReview: previousReviewContext });
       const aiResponse = await this.nvidia.review(reviewInput, template?.data || null, sources, reviewPurpose) as any;
-      const reviewData = this.parseReview(aiResponse?.choices?.[0]?.message?.content);
+      const aiChoice = aiResponse?.choices?.[0];
+      const reviewData = this.parseReview(aiChoice?.message?.content, aiChoice?.finish_reason);
       const sourceMap = new Map(sources.map((source: any) => [source.chunkId, source]));
       const sourceDocumentVersions = new Map<string, any[]>();
       for (const source of sources as any[]) {
@@ -205,14 +210,59 @@ export class ReportReviewProcessor extends WorkerHost {
     return '';
   }
 
-  private parseReview(content: unknown): AiReview {
-    if (typeof content !== 'string') throw new BadGatewayException('Respons review AI tidak berisi teks JSON');
-    const json = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    try {
-      const parsed = JSON.parse(json);
-      if (!parsed || typeof parsed !== 'object' || typeof parsed.summary !== 'string' || !Array.isArray(parsed.findings)) throw new Error('schema');
-      return parsed;
-    } catch { throw new BadGatewayException('Respons review AI bukan JSON sesuai schema'); }
+  private parseReview(content: unknown, finishReason?: string | null): AiReview {
+    const text = typeof content === 'string'
+      ? content
+      : Array.isArray(content)
+        ? content.map((part: any) => typeof part?.text === 'string' ? part.text : '').filter(Boolean).join('\n')
+        : '';
+    if (!text.trim()) throw new BadGatewayException('Respons review AI tidak berisi teks JSON');
+
+    // Nemotron kadang menyertakan markdown atau satu kalimat pembuka sebelum JSON.
+    const cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    const candidates: string[] = [];
+    const fenced = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fenced?.[1]) candidates.push(fenced[1].trim());
+    candidates.push(cleaned);
+
+    // Ambil objek JSON pertama yang seimbang, tanpa tertipu kurung kurawal di dalam string.
+    for (const candidate of candidates) {
+      const start = candidate.indexOf('{');
+      if (start < 0) continue;
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let index = start; index < candidate.length; index++) {
+        const char = candidate[index];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (char === '\\') escaped = true;
+          else if (char === '"') inString = false;
+          continue;
+        }
+        if (char === '"') inString = true;
+        else if (char === '{') depth++;
+        else if (char === '}' && --depth === 0) {
+          try {
+            const parsed = JSON.parse(candidate.slice(start, index + 1));
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || typeof parsed.summary !== 'string') continue;
+            return {
+              ...parsed,
+              limitations: Array.isArray(parsed.limitations) ? parsed.limitations : [],
+              regulationAssessments: Array.isArray(parsed.regulationAssessments) ? parsed.regulationAssessments : [],
+              findings: Array.isArray(parsed.findings) ? parsed.findings : [],
+              reportRecommendations: Array.isArray(parsed.reportRecommendations) ? parsed.reportRecommendations : [],
+              inspectionRecommendations: Array.isArray(parsed.inspectionRecommendations) ? parsed.inspectionRecommendations : [],
+            };
+          } catch { break; }
+        }
+      }
+    }
+
+    if (finishReason === 'length') {
+      throw new BadGatewayException('Respons review AI terpotong sebelum JSON selesai. Coba jalankan review kembali.');
+    }
+    throw new BadGatewayException('Respons review AI bukan JSON sesuai schema. Coba jalankan review kembali.');
   }
 
   private safeError(error: unknown) { return error instanceof Error ? error.message.replace(/https?:\/\/\S+/g, '[external-url]').slice(0, 300) : 'Review AI gagal'; }
