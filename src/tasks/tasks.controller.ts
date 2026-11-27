@@ -12,6 +12,8 @@ class TaskDto {
   @IsString() @MaxLength(500) title: string;
   @IsOptional() @IsString() @MaxLength(8000) description?: string;
   @IsOptional() @IsMongoId() assigneeId?: string;
+  @IsOptional() @IsString() unitId?: string;
+  @IsOptional() @IsString() @MaxLength(300) auditee?: string;
   @IsOptional() @IsDateString() dueDate?: string;
 }
 class TaskUpdateDto {
@@ -19,6 +21,8 @@ class TaskUpdateDto {
   @IsOptional() @IsString() @MaxLength(8000) description?: string;
   @IsOptional() @IsDateString() dueDate?: string;
   @IsOptional() @IsMongoId() assigneeId?: string;
+  @IsOptional() @IsString() unitId?: string;
+  @IsOptional() @IsString() @MaxLength(300) auditee?: string;
   @IsOptional() @IsIn(['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED']) status?: string;
 }
 
@@ -34,30 +38,39 @@ export class TasksController {
   ) {}
 
   @Get('tasks')
-  async list(@Query('page') page = '1', @Req() req: any) {
-    const p = Number(page) > 0 ? Number(page) : 1;
-    const filter = req.user.role === Role.ADMIN_SPI || req.user.role === Role.PIMPINAN_SPI
+  async list(@Query('page') page = '1', @Query('limit') limit = '20', @Query('search') search = '', @Query('status') status = '', @Req() req: any) {
+    const p = Math.max(1, Number(page) || 1);
+    const size = Math.min(Math.max(1, Number(limit) || 20), 100);
+    const accessFilter = req.user.role === Role.ADMIN_SPI || req.user.role === Role.PIMPINAN_SPI
       ? {} : { $or: [{ createdBy: req.user.sub }, { 'data.assigneeId': req.user.sub }] };
-    return this.tasks.find(filter).sort({ createdAt: -1 }).skip((p - 1) * 20).limit(100).lean();
+    const filter: Record<string, any> = { ...accessFilter };
+    if (search.trim()) filter['data.title'] = { $regex: search.trim(), $options: 'i' };
+    if (status) filter.$and = [{ $or: [{ status }, { 'data.status': status }] }];
+    const [items, total] = await Promise.all([
+      this.tasks.find(filter).sort({ createdAt: -1 }).skip((p - 1) * size).limit(size).lean(),
+      this.tasks.countDocuments(filter),
+    ]);
+    return { items, page: p, limit: size, total };
   }
 
   @Post('tasks')
-  @Roles(Role.ADMIN_SPI, Role.ANGGOTA_SPI)
+  @Roles(Role.ADMIN_SPI, Role.PIMPINAN_SPI)
   create(@Body() dto: TaskDto, @Req() req: any) {
-    return this.tasks.create({ data: { ...dto, ...(dto.dueDate ? { dueDate: new Date(dto.dueDate) } : {}) }, createdBy: req.user.sub, status: dto.assigneeId ? 'ASSIGNED' : 'OPEN' });
+    const auditee = dto.auditee?.trim() || dto.unitId?.trim();
+    return this.tasks.create({ data: { ...dto, ...(auditee ? { auditee, unitId: auditee } : {}), ...(dto.dueDate ? { dueDate: new Date(dto.dueDate) } : {}) }, createdBy: req.user.sub, status: dto.assigneeId ? 'ASSIGNED' : 'OPEN' });
   }
 
   @Patch('tasks/:id')
+  @Roles(Role.ADMIN_SPI, Role.PIMPINAN_SPI)
   async update(@Param('id') id: string, @Body() dto: TaskUpdateDto, @Req() req: any) {
     const task: any = await this.tasks.findById(id);
     if (!task) throw new NotFoundException('Tugas tidak ditemukan');
     if (task.data?.followUp?.followUpId) throw new ForbiddenException('Tugas tindak lanjut harus dikelola melalui endpoint follow-up laporan');
-    if (![Role.ADMIN_SPI, Role.PIMPINAN_SPI].includes(req.user.role) && task.createdBy !== req.user.sub && task.data?.assigneeId !== req.user.sub) throw new ForbiddenException('Tidak memiliki akses ke tugas ini');
-    if (dto.assigneeId !== undefined && ![Role.ADMIN_SPI, Role.PIMPINAN_SPI].includes(req.user.role)) throw new ForbiddenException('Hanya admin atau pimpinan yang dapat mengubah penanggung jawab');
     const allowed = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
     if (dto.status && !allowed.includes(dto.status)) throw new ForbiddenException('Status tugas tidak diizinkan');
     const patch: Record<string, unknown> = {};
-    for (const field of ['title', 'description', 'assigneeId', 'status'] as const) if (dto[field] !== undefined) patch[`data.${field}`] = dto[field];
+    for (const field of ['title', 'description', 'assigneeId', 'unitId', 'auditee', 'status'] as const) if (dto[field] !== undefined) patch[`data.${field}`] = dto[field];
+    if (dto.auditee !== undefined) patch['data.unitId'] = dto.auditee.trim();
     if (dto.dueDate !== undefined) patch['data.dueDate'] = new Date(dto.dueDate);
     patch.updatedAt = new Date();
     return this.tasks.findByIdAndUpdate(id, { $set: patch }, { new: true }).lean();
@@ -77,6 +90,7 @@ export class TasksController {
   }
 
   @Patch('occurrences/:id/status')
+  @Roles(Role.ADMIN_SPI, Role.PIMPINAN_SPI)
   async updateOccurrence(@Param('id') id: string, @Body() body: { status?: string }, @Req() req: any) {
     const occurrence: any = await this.occurrencesModel.findById(id).lean();
     if (!occurrence) throw new NotFoundException('Occurrence tidak ditemukan');

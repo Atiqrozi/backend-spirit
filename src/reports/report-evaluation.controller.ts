@@ -373,7 +373,6 @@ export class ReportEvaluationController {
   private async getReport(reportId: string, user: any) {
     const report: any = await this.reports.findById(reportId).lean();
     if (!report) throw new NotFoundException('Laporan tidak ditemukan');
-    if (user.role === Role.ANGGOTA_SPI && report.createdBy !== user.sub) throw new ForbiddenException('Tidak memiliki akses ke laporan ini');
     return report;
   }
 

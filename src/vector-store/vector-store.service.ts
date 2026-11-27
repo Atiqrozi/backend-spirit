@@ -79,7 +79,7 @@ export class VectorStoreService {
     return this.chunks.deleteMany({ documentVersionId, chunkId: { $nin: retainedChunkIds } });
   }
 
-  async search(input: { query: string; filters?: { documentIds?: string[]; documentVersionIds?: string[] }; topK?: number; rerank?: boolean; rerankTopN?: number }) {
+  async search(input: { query: string; filters?: { documentIds?: string[]; documentVersionIds?: string[] }; topK?: number; rerank?: boolean; rerankTopN?: number; timeoutMs?: number }) {
     if (!input.query?.trim()) throw new BadRequestException('query wajib diisi');
     const topK = Math.min(Math.max(Number(input.topK || 20), 1), 100);
     const rerank = input.rerank !== false;
@@ -87,7 +87,7 @@ export class VectorStoreService {
     const model = process.env.CHAT_AI_EMBEDDING_MODEL || process.env.NVIDIA_EMBEDDING_MODEL || 'nvidia/nemotron-3.5-embed-1b';
     const dimensions = Number(process.env.NVIDIA_EMBEDDING_DIMENSIONS || 2048);
 
-    const result = await this.nvidia.embed([input.query], 'query') as EmbeddingResponse;
+    const result = await this.nvidia.embed([input.query], 'query', input.timeoutMs) as EmbeddingResponse;
     const queryVector = result.data?.[0]?.embedding;
     if (!queryVector || queryVector.length !== dimensions) throw new BadGatewayException(`Embedding query tidak sesuai dimensi index (${dimensions})`);
     const indexName = process.env.MONGODB_VECTOR_INDEX_NAME || 'spi_chunks_vector_idx';
@@ -110,7 +110,7 @@ export class VectorStoreService {
     if (!rerank || !candidates.length) return { query: input.query, sources: candidates.slice(0, topK), count: candidates.length, embeddingModel: model, rerankModel: null };
     if (!process.env.NVIDIA_API_KEY && !process.env.CHAT_AI_API_KEY) throw new ServiceUnavailableException('NVIDIA_API_KEY belum dikonfigurasi untuk reranking');
     const rerankCount = Math.min(candidates.length, rerankTopN, 50);
-    const ranked = await this.reranker.rerank(input.query, candidates.slice(0, rerankCount).map((item) => ({ text: item.text })));
+    const ranked = await this.reranker.rerank(input.query, candidates.slice(0, rerankCount).map((item) => ({ text: item.text })), input.timeoutMs);
     const reranked = ranked.passages.map((item: any) => ({ ...candidates[item.index], rerankScore: item.score }));
     const sources = [...reranked, ...candidates.slice(rerankCount)].slice(0, topK);
     return { query: input.query, sources, count: sources.length, embeddingModel: model, rerankModel: process.env.NVIDIA_RERANK_MODEL || 'nvidia/nemotron-3.5-rerank-8b' };

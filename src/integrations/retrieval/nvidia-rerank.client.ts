@@ -8,13 +8,13 @@ export interface RerankPassage {
 
 @Injectable()
 export class NvidiaRerankClient {
-  async rerank(query: string, passages: RerankPassage[]) {
+  async rerank(query: string, passages: RerankPassage[], timeoutOverride?: number) {
     const apiKey = process.env.NVIDIA_API_KEY || process.env.CHAT_AI_API_KEY;
     if (!apiKey) throw new ServiceUnavailableException('NVIDIA_API_KEY belum dikonfigurasi');
     if (!passages?.length) return { rankings: [], passages: [] };
 
     const endpoint = process.env.NVIDIA_RERANK_ENDPOINT || 'https://ai.api.nvidia.com/v1/retrieval/nvidia/nemotron-3.5-rerank-8b/reranking';
-    const timeoutMs = Math.max(Number(process.env.NVIDIA_RERANK_TIMEOUT_MS || 90000), 10000);
+    const timeoutMs = Math.max(Number(timeoutOverride || process.env.NVIDIA_RERANK_TIMEOUT_MS || 90000), 10000);
     let response: Response;
     try {
       response = await fetch(endpoint, {
