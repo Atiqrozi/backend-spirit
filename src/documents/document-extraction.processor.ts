@@ -4,7 +4,6 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { Model } from 'mongoose';
 import pdfParse = require('pdf-parse');
-import { convert } from 'pdf-raster';
 import { NvidiaService } from '../integrations/nvidia/nvidia.service';
 import { VectorStoreService } from '../vector-store/vector-store.service';
 import { ImageKitService } from '../files/imagekit.service';
@@ -117,6 +116,7 @@ export class DocumentExtractionProcessor extends WorkerHost {
     if (!pageCount || pageCount > maxPages) throw new Error(`Jumlah halaman PDF tidak valid atau melebihi batas ${maxPages}`);
     const pages: ExtractedPage[] = Array.from({ length: pageCount }, (_, index) => ({ pageNumber: index + 1, text: nativeText[index] || '', status: (nativeText[index] || '').length >= 20 ? 'NATIVE_TEXT_EXTRACTED' : 'PENDING_OCR' }));
     const scanIndices = pages.filter((page) => page.status === 'PENDING_OCR').map((page) => page.pageNumber - 1);
+    const { convert } = scanIndices.length ? await import('pdf-raster') : { convert: null };
     for (const pageIndex of scanIndices) {
       const page = pages[pageIndex];
       let completed = false;
