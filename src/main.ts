@@ -22,7 +22,7 @@ async function bootstrap() {
   app.setGlobalPrefix(process.env.API_PREFIX || 'api/v1');
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true, forbidNonWhitelisted: true }));
   const config = new DocumentBuilder().setTitle('SPI Compliance API').setDescription('Sistem Pemantauan Kepatuhan Dokumen SPI. Kontrak evaluasi laporan mencakup AI review, evidence mapping, evaluasi manusia, dan tindak lanjut.').setVersion('2.0').addBearerAuth().build();
-  SwaggerModule.setup('docs', app, SwaggerModule.createDocument(app, config));
+  SwaggerModule.setup('docs', app, SwaggerModule.createDocument(app, config), { useGlobalPrefix: true });
   await app.listen(process.env.PORT || 3000);
 }
 bootstrap();
